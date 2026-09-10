@@ -10,7 +10,7 @@ const passesQualificationRule = (volunteer: Volunteer, rule: QualificationRule):
   return rule.qualificationIds.every((id) => !held.has(id));
 };
 
-// Rules 1-3 for now: shift/opening status, capacity, qualifications. Other rules land in later steps.
+// Rules 1-4 for now: shift/opening status, capacity, qualifications, waiver. Other rules land in later steps.
 export const checkEligibility = (
   volunteerId: string,
   openingId: string,
@@ -69,6 +69,16 @@ export const checkEligibility = (
     if (!passesQualificationRule(volunteer, rule)) {
       addReason(rule.type === 'DOES_NOT_HAVE_ALL' ? 'DISALLOWED_QUALIFICATION' : 'MISSING_QUALIFICATION');
     }
+  }
+
+  if (opportunity.requiredWaiverId) {
+    const waiver = fixtures.waivers.find((w) => w.id === opportunity.requiredWaiverId);
+    if (!waiver) throw new Error(`Unknown waiver: ${opportunity.requiredWaiverId}`);
+
+    const hasCurrentSignature = volunteer.signedWaivers.some(
+      (sw) => sw.waiverId === waiver.id && sw.version === waiver.currentVersion
+    );
+    if (!hasCurrentSignature) addReason('WAIVER_REQUIRED');
   }
 
   const status = reasons.length > 0 ? 'BLOCKED' : waitlistEligible ? 'WAITLIST' : 'ELIGIBLE';
