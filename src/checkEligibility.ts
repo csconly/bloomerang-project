@@ -1,4 +1,4 @@
-import type { EligibilityResult, ReasonCode, Fixtures, QualificationRule, Volunteer } from './types/index';
+import type { EligibilityResult, ReasonCode, Fixtures, QualificationRule, Volunteer, Shift } from './types/index';
 
 // DOES_NOT_HAVE_ALL passes when the volunteer holds NONE of the listed
 // qualifications. The spec's rule table says "not all", but its own worked
@@ -10,7 +10,12 @@ const passesQualificationRule = (volunteer: Volunteer, rule: QualificationRule):
   return rule.qualificationIds.every((id) => !held.has(id));
 };
 
-// Rules 1-5 for now: shift/opening status, capacity, qualifications, waiver, group restriction. Other rules land in later steps.
+// Touching endpoints don't overlap (a shift ending at 12:00 and another
+// starting at 12:00 is fine).
+const shiftsOverlap = (a: Shift, b: Shift): boolean =>
+  new Date(a.startsAt) < new Date(b.endsAt) && new Date(b.startsAt) < new Date(a.endsAt);
+
+// All 6 rules: shift/opening status, capacity, qualifications, waiver, group restriction, schedule conflict.
 export const checkEligibility = (
   volunteerId: string,
   openingId: string,
@@ -90,6 +95,24 @@ export const checkEligibility = (
     );
     if (!isMember) groupBlocked = true;
   }
+
+  // Compare against the volunteer's other confirmed signups only -- excluding
+  // this exact opening avoids flagging a shift as conflicting with itself.
+  const confirmedElsewhere = fixtures.signups.filter(
+    (s) => s.volunteerId === volunteerId && s.state === 'CONFIRMED' && s.openingId !== openingId
+  );
+
+  const hasScheduleConflict = confirmedElsewhere.some((s) => {
+    const otherOpening = fixtures.openings.find((o) => o.id === s.openingId);
+    if (!otherOpening) throw new Error(`Unknown opening: ${s.openingId}`);
+
+    const otherShift = fixtures.shifts.find((sh) => sh.id === otherOpening.shiftId);
+    if (!otherShift) throw new Error(`Unknown shift: ${otherOpening.shiftId}`);
+
+    return shiftsOverlap(shift, otherShift);
+  });
+
+  if (hasScheduleConflict) addReason('SCHEDULE_CONFLICT');
 
   const status = reasons.length > 0 || groupBlocked ? 'BLOCKED' : waitlistEligible ? 'WAITLIST' : 'ELIGIBLE';
 
