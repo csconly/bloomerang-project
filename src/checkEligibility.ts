@@ -1,6 +1,16 @@
-import type { EligibilityResult, ReasonCode, Fixtures } from './types/index';
+import type { EligibilityResult, ReasonCode, Fixtures, QualificationRule, Volunteer } from './types/index';
 
-// Rules 1-2 for now: shift/opening status, capacity. Other rules land in later steps.
+// DOES_NOT_HAVE_ALL passes when the volunteer holds NONE of the listed
+// qualifications. The spec's rule table says "not all", but its own worked
+// example (Fern/warehouse) only makes sense under "none" -- see DECISIONS.
+const passesQualificationRule = (volunteer: Volunteer, rule: QualificationRule): boolean => {
+  const held = new Set(volunteer.qualificationIds);
+  if (rule.type === 'HAS_ANY') return rule.qualificationIds.some((id) => held.has(id));
+  if (rule.type === 'HAS_ALL') return rule.qualificationIds.every((id) => held.has(id));
+  return rule.qualificationIds.every((id) => !held.has(id));
+};
+
+// Rules 1-3 for now: shift/opening status, capacity, qualifications. Other rules land in later steps.
 export const checkEligibility = (
   volunteerId: string,
   openingId: string,
@@ -15,19 +25,25 @@ export const checkEligibility = (
   const shift = fixtures.shifts.find((s) => s.id === opening.shiftId);
   if (!shift) throw new Error(`Unknown shift: ${opening.shiftId}`);
 
+  const opportunity = fixtures.opportunities.find((o) => o.id === shift.opportunityId);
+  if (!opportunity) throw new Error(`Unknown opportunity: ${shift.opportunityId}`);
+
   const reasons: ReasonCode[] = [];
+  const addReason = (code: ReasonCode) => {
+    if (!reasons.includes(code)) reasons.push(code);
+  };
   let waitlistEligible = false;
 
-  if (!shift.isPublished) reasons.push('SHIFT_NOT_PUBLISHED');
-  if (!shift.isActive) reasons.push('SHIFT_INACTIVE');
-  if (!opening.isActive) reasons.push('OPENING_INACTIVE');
+  if (!shift.isPublished) addReason('SHIFT_NOT_PUBLISHED');
+  if (!shift.isActive) addReason('SHIFT_INACTIVE');
+  if (!opening.isActive) addReason('OPENING_INACTIVE');
 
   const existingSignup = fixtures.signups.find(
     (s) => s.volunteerId === volunteerId && s.openingId === openingId
   );
 
   if (existingSignup) {
-    reasons.push('ALREADY_SIGNED_UP');
+    addReason('ALREADY_SIGNED_UP');
   } else {
     const confirmedCount = fixtures.signups.filter(
       (s) => s.openingId === openingId && s.state === 'CONFIRMED'
@@ -39,12 +55,19 @@ export const checkEligibility = (
       ).length;
 
       if (opening.waitlistMax === 0) {
-        reasons.push('AT_CAPACITY');
+        addReason('AT_CAPACITY');
       } else if (waitlistedCount < opening.waitlistMax) {
         waitlistEligible = true;
       } else {
-        reasons.push('WAITLIST_FULL');
+        addReason('WAITLIST_FULL');
       }
+    }
+  }
+
+  for (const rule of opportunity.qualificationRules) {
+    if (!rule.isActive) continue;
+    if (!passesQualificationRule(volunteer, rule)) {
+      addReason(rule.type === 'DOES_NOT_HAVE_ALL' ? 'DISALLOWED_QUALIFICATION' : 'MISSING_QUALIFICATION');
     }
   }
 
