@@ -10,7 +10,7 @@ const passesQualificationRule = (volunteer: Volunteer, rule: QualificationRule):
   return rule.qualificationIds.every((id) => !held.has(id));
 };
 
-// Rules 1-4 for now: shift/opening status, capacity, qualifications, waiver. Other rules land in later steps.
+// Rules 1-5 for now: shift/opening status, capacity, qualifications, waiver, group restriction. Other rules land in later steps.
 export const checkEligibility = (
   volunteerId: string,
   openingId: string,
@@ -33,6 +33,7 @@ export const checkEligibility = (
     if (!reasons.includes(code)) reasons.push(code);
   };
   let waitlistEligible = false;
+  let groupBlocked = false;
 
   if (!shift.isPublished) addReason('SHIFT_NOT_PUBLISHED');
   if (!shift.isActive) addReason('SHIFT_INACTIVE');
@@ -81,7 +82,16 @@ export const checkEligibility = (
     if (!hasCurrentSignature) addReason('WAIVER_REQUIRED');
   }
 
-  const status = reasons.length > 0 ? 'BLOCKED' : waitlistEligible ? 'WAITLIST' : 'ELIGIBLE';
+  // Group membership is confidential: this never adds a reason code, only
+  // forces BLOCKED. Other rules' reasons still surface normally -- see DECISIONS.
+  if (opportunity.restrictedToGroupIds.length > 0) {
+    const isMember = opportunity.restrictedToGroupIds.some((groupId) =>
+      volunteer.groupIds.includes(groupId)
+    );
+    if (!isMember) groupBlocked = true;
+  }
+
+  const status = reasons.length > 0 || groupBlocked ? 'BLOCKED' : waitlistEligible ? 'WAITLIST' : 'ELIGIBLE';
 
   return { status, reasons };
 };
