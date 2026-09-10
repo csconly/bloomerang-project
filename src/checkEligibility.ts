@@ -96,21 +96,20 @@ export const checkEligibility = (
     if (!isMember) groupBlocked = true;
   }
 
-  // Compare against the volunteer's other confirmed signups only -- excluding
-  // this exact opening avoids flagging a shift as conflicting with itself.
-  const confirmedElsewhere = fixtures.signups.filter(
-    (s) => s.volunteerId === volunteerId && s.state === 'CONFIRMED' && s.openingId !== openingId
-  );
+  // A confirmed signup on this exact shift (whichever opening) is the same
+  // time slot, not a separate commitment -- only compare against genuinely
+  // different shifts.
+  const hasScheduleConflict = fixtures.signups
+    .filter((s) => s.volunteerId === volunteerId && s.state === 'CONFIRMED')
+    .some((s) => {
+      const otherOpening = fixtures.openings.find((o) => o.id === s.openingId);
+      if (!otherOpening) throw new Error(`Unknown opening: ${s.openingId}`);
 
-  const hasScheduleConflict = confirmedElsewhere.some((s) => {
-    const otherOpening = fixtures.openings.find((o) => o.id === s.openingId);
-    if (!otherOpening) throw new Error(`Unknown opening: ${s.openingId}`);
+      const otherShift = fixtures.shifts.find((sh) => sh.id === otherOpening.shiftId);
+      if (!otherShift) throw new Error(`Unknown shift: ${otherOpening.shiftId}`);
 
-    const otherShift = fixtures.shifts.find((sh) => sh.id === otherOpening.shiftId);
-    if (!otherShift) throw new Error(`Unknown shift: ${otherOpening.shiftId}`);
-
-    return shiftsOverlap(shift, otherShift);
-  });
+      return otherShift.id !== shift.id && shiftsOverlap(shift, otherShift);
+    });
 
   if (hasScheduleConflict) addReason('SCHEDULE_CONFLICT');
 
