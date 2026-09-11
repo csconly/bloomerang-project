@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type {
   EligibilityResult,
   EligibilityStatus,
@@ -9,6 +11,12 @@ import type {
   Opportunity,
   Shift,
 } from './types/index';
+
+// Stands in for a database read. A real implementation would query one here
+// instead -- checkEligibility's signature wouldn't need to change either way.
+const fixtures: Fixtures = JSON.parse(
+  readFileSync(join(__dirname, '../fixtures/fixtures.json'), 'utf-8')
+);
 
 // DOES_NOT_HAVE_ALL passes when the volunteer holds NONE of the listed
 // qualifications. The spec's rule table says "not all", but its own worked
@@ -39,8 +47,7 @@ type OpportunityLevelResult = {
 // checkEligibilityForOpportunity computes this once and reuses it.
 const getOpportunityLevelReasons = (
   volunteer: Volunteer,
-  opportunity: Opportunity,
-  fixtures: Fixtures
+  opportunity: Opportunity
 ): OpportunityLevelResult => {
   const reasons: ReasonCode[] = [];
   let groupBlocked = false;
@@ -84,8 +91,7 @@ type OpeningLevelResult = {
 const getOpeningLevelReasons = (
   volunteerId: string,
   opening: Opening,
-  shift: Shift,
-  fixtures: Fixtures
+  shift: Shift
 ): OpeningLevelResult => {
   const reasons: ReasonCode[] = [];
   let waitlistEligible = false;
@@ -158,11 +164,7 @@ const combine = (
 };
 
 // All 6 rules: shift/opening status, capacity, qualifications, waiver, group restriction, schedule conflict.
-export const checkEligibility = (
-  volunteerId: string,
-  openingId: string,
-  fixtures: Fixtures
-): EligibilityResult => {
+export const checkEligibility = (volunteerId: string, openingId: string): EligibilityResult => {
   const volunteer = fixtures.volunteers.find((v) => v.id === volunteerId);
   if (!volunteer) throw new Error(`Unknown volunteer: ${volunteerId}`);
 
@@ -175,8 +177,8 @@ export const checkEligibility = (
   const opportunity = fixtures.opportunities.find((o) => o.id === shift.opportunityId);
   if (!opportunity) throw new Error(`Unknown opportunity: ${shift.opportunityId}`);
 
-  const opportunityLevel = getOpportunityLevelReasons(volunteer, opportunity, fixtures);
-  const openingLevel = getOpeningLevelReasons(volunteerId, opening, shift, fixtures);
+  const opportunityLevel = getOpportunityLevelReasons(volunteer, opportunity);
+  const openingLevel = getOpeningLevelReasons(volunteerId, opening, shift);
 
   return combine(opportunityLevel, openingLevel);
 };
@@ -192,8 +194,7 @@ export type OpeningEligibility = {
 // once here instead of once per opening -- see the shared helpers above.
 export const checkEligibilityForOpportunity = (
   volunteerId: string,
-  opportunityId: string,
-  fixtures: Fixtures
+  opportunityId: string
 ): OpeningEligibility[] => {
   const volunteer = fixtures.volunteers.find((v) => v.id === volunteerId);
   if (!volunteer) throw new Error(`Unknown volunteer: ${volunteerId}`);
@@ -201,7 +202,7 @@ export const checkEligibilityForOpportunity = (
   const opportunity = fixtures.opportunities.find((o) => o.id === opportunityId);
   if (!opportunity) throw new Error(`Unknown opportunity: ${opportunityId}`);
 
-  const opportunityLevel = getOpportunityLevelReasons(volunteer, opportunity, fixtures);
+  const opportunityLevel = getOpportunityLevelReasons(volunteer, opportunity);
 
   const shifts = fixtures.shifts.filter((s) => s.opportunityId === opportunityId);
   const openings = fixtures.openings.filter((o) => shifts.some((s) => s.id === o.shiftId));
@@ -210,7 +211,7 @@ export const checkEligibilityForOpportunity = (
     const shift = shifts.find((s) => s.id === opening.shiftId);
     if (!shift) throw new Error(`Unknown shift: ${opening.shiftId}`);
 
-    const openingLevel = getOpeningLevelReasons(volunteerId, opening, shift, fixtures);
+    const openingLevel = getOpeningLevelReasons(volunteerId, opening, shift);
     const { status, reasons } = combine(opportunityLevel, openingLevel);
 
     return { openingId: opening.id, status, reasons };

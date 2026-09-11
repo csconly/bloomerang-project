@@ -1,7 +1,4 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { checkEligibility, checkEligibilityForOpportunity } from './checkEligibility';
-import type { Fixtures } from './types/index';
 
 const usage = [
   'Usage:',
@@ -16,15 +13,11 @@ if (!volunteerId || !secondId || (mode !== 'opening' && mode !== 'opportunity'))
   process.exit(1);
 }
 
-const fixtures: Fixtures = JSON.parse(
-  readFileSync(join(__dirname, '../fixtures/fixtures.json'), 'utf-8')
-);
-
 try {
   const result =
     mode === 'opening'
-      ? checkEligibility(volunteerId, secondId, fixtures)
-      : checkEligibilityForOpportunity(volunteerId, secondId, fixtures);
+      ? checkEligibility(volunteerId, secondId)
+      : checkEligibilityForOpportunity(volunteerId, secondId);
 
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {

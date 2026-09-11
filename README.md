@@ -1,6 +1,6 @@
 # Volunteer shift eligibility
 
-Implementation of `checkEligibility(volunteerId, openingId, fixtures) -> { status, reasons }`
+Implementation of `checkEligibility(volunteerId, openingId) -> { status, reasons }`
 per [`SPEC.md`](SPEC.md). See [`EXERCISE-README.md`](EXERCISE-README.md) for
 the original assessment instructions, and [`DECISIONS.md`](DECISIONS.md) for
 the reasoning behind every judgment call made while resolving gaps and
