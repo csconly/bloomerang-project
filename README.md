@@ -24,18 +24,28 @@ supplementary tests covering the spec ambiguities resolved in
 
 ## Run it from the command line
 
-```bash
-npm run cli -- <volunteerId> <openingId>
-```
-
-Example:
+Check a single opening:
 
 ```bash
-npm run cli -- vol-001 open-meals-mon-pm-server
+npm run cli -- opening <volunteerId> <openingId>
 ```
 
-Volunteer and opening IDs come from `fixtures/fixtures.json`. Prints the
-`{ status, reasons }` result as JSON.
+Check every opening under an opportunity at once:
+
+```bash
+npm run cli -- opportunity <volunteerId> <opportunityId>
+```
+
+Examples:
+
+```bash
+npm run cli -- opening vol-001 open-meals-mon-pm-server
+npm run cli -- opportunity vol-002 opp-meals
+```
+
+IDs come from `fixtures/fixtures.json`. Prints the result as JSON --
+`{ status, reasons }` for a single opening, or a `{ openingId, status, reasons }[]`
+array for a whole opportunity.
 
 ## Other commands
 

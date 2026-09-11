@@ -1,4 +1,14 @@
-import type { EligibilityResult, ReasonCode, Fixtures, QualificationRule, Volunteer, Shift } from './types/index';
+import type {
+  EligibilityResult,
+  EligibilityStatus,
+  ReasonCode,
+  Fixtures,
+  QualificationRule,
+  Volunteer,
+  Opening,
+  Opportunity,
+  Shift,
+} from './types/index';
 
 // DOES_NOT_HAVE_ALL passes when the volunteer holds NONE of the listed
 // qualifications. The spec's rule table says "not all", but its own worked
@@ -14,6 +24,138 @@ const passesQualificationRule = (volunteer: Volunteer, rule: QualificationRule):
 // starting at 12:00 is fine).
 const shiftsOverlap = (a: Shift, b: Shift): boolean =>
   new Date(a.startsAt) < new Date(b.endsAt) && new Date(b.startsAt) < new Date(a.endsAt);
+
+const addUnique = (reasons: ReasonCode[], code: ReasonCode) => {
+  if (!reasons.includes(code)) reasons.push(code);
+};
+
+type OpportunityLevelResult = {
+  reasons: ReasonCode[];
+  groupBlocked: boolean;
+};
+
+// Rules 3-5: qualifications, waiver, group restriction. Depends only on the
+// volunteer and the opportunity -- identical for every opening under it, so
+// checkEligibilityForOpportunity computes this once and reuses it.
+const getOpportunityLevelReasons = (
+  volunteer: Volunteer,
+  opportunity: Opportunity,
+  fixtures: Fixtures
+): OpportunityLevelResult => {
+  const reasons: ReasonCode[] = [];
+  let groupBlocked = false;
+
+  for (const rule of opportunity.qualificationRules) {
+    if (!rule.isActive) continue;
+    if (!passesQualificationRule(volunteer, rule)) {
+      addUnique(reasons, rule.type === 'DOES_NOT_HAVE_ALL' ? 'DISALLOWED_QUALIFICATION' : 'MISSING_QUALIFICATION');
+    }
+  }
+
+  if (opportunity.requiredWaiverId) {
+    const waiver = fixtures.waivers.find((w) => w.id === opportunity.requiredWaiverId);
+    if (!waiver) throw new Error(`Unknown waiver: ${opportunity.requiredWaiverId}`);
+
+    const hasCurrentSignature = volunteer.signedWaivers.some(
+      (sw) => sw.waiverId === waiver.id && sw.version === waiver.currentVersion
+    );
+    if (!hasCurrentSignature) addUnique(reasons, 'WAIVER_REQUIRED');
+  }
+
+  // Group membership is confidential: this never adds a reason code, only
+  // forces BLOCKED. Other rules' reasons still surface normally -- see DECISIONS.
+  if (opportunity.restrictedToGroupIds.length > 0) {
+    const isMember = opportunity.restrictedToGroupIds.some((groupId) =>
+      volunteer.groupIds.includes(groupId)
+    );
+    if (!isMember) groupBlocked = true;
+  }
+
+  return { reasons, groupBlocked };
+};
+
+type OpeningLevelResult = {
+  reasons: ReasonCode[];
+  waitlistEligible: boolean;
+};
+
+// Rules 1, 2, 6: shift/opening status, capacity, schedule conflict. Genuinely
+// varies per opening, so this always runs once per opening either way.
+const getOpeningLevelReasons = (
+  volunteerId: string,
+  opening: Opening,
+  shift: Shift,
+  fixtures: Fixtures
+): OpeningLevelResult => {
+  const reasons: ReasonCode[] = [];
+  let waitlistEligible = false;
+
+  if (!shift.isPublished) addUnique(reasons, 'SHIFT_NOT_PUBLISHED');
+  if (!shift.isActive) addUnique(reasons, 'SHIFT_INACTIVE');
+  if (!opening.isActive) addUnique(reasons, 'OPENING_INACTIVE');
+
+  const existingSignup = fixtures.signups.find(
+    (s) => s.volunteerId === volunteerId && s.openingId === opening.id
+  );
+
+  if (existingSignup) {
+    addUnique(reasons, 'ALREADY_SIGNED_UP');
+  } else {
+    const confirmedCount = fixtures.signups.filter(
+      (s) => s.openingId === opening.id && s.state === 'CONFIRMED'
+    ).length;
+
+    if (confirmedCount >= opening.maxVolunteers) {
+      const waitlistedCount = fixtures.signups.filter(
+        (s) => s.openingId === opening.id && s.state === 'WAITLISTED'
+      ).length;
+
+      if (opening.waitlistMax === 0) {
+        addUnique(reasons, 'AT_CAPACITY');
+      } else if (waitlistedCount < opening.waitlistMax) {
+        waitlistEligible = true;
+      } else {
+        addUnique(reasons, 'WAITLIST_FULL');
+      }
+    }
+  }
+
+  // A confirmed signup on this exact shift (whichever opening) is the same
+  // time slot, not a separate commitment -- only compare against genuinely
+  // different shifts.
+  const hasScheduleConflict = fixtures.signups
+    .filter((s) => s.volunteerId === volunteerId && s.state === 'CONFIRMED')
+    .some((s) => {
+      const otherOpening = fixtures.openings.find((o) => o.id === s.openingId);
+      if (!otherOpening) throw new Error(`Unknown opening: ${s.openingId}`);
+
+      const otherShift = fixtures.shifts.find((sh) => sh.id === otherOpening.shiftId);
+      if (!otherShift) throw new Error(`Unknown shift: ${otherOpening.shiftId}`);
+
+      return otherShift.id !== shift.id && shiftsOverlap(shift, otherShift);
+    });
+
+  if (hasScheduleConflict) addUnique(reasons, 'SCHEDULE_CONFLICT');
+
+  return { reasons, waitlistEligible };
+};
+
+const combine = (
+  opportunityLevel: OpportunityLevelResult,
+  openingLevel: OpeningLevelResult
+): EligibilityResult => {
+  const reasons: ReasonCode[] = [...opportunityLevel.reasons];
+  for (const code of openingLevel.reasons) addUnique(reasons, code);
+
+  const status: EligibilityStatus =
+    reasons.length > 0 || opportunityLevel.groupBlocked
+      ? 'BLOCKED'
+      : openingLevel.waitlistEligible
+        ? 'WAITLIST'
+        : 'ELIGIBLE';
+
+  return { status, reasons };
+};
 
 // All 6 rules: shift/opening status, capacity, qualifications, waiver, group restriction, schedule conflict.
 export const checkEligibility = (
@@ -33,87 +175,44 @@ export const checkEligibility = (
   const opportunity = fixtures.opportunities.find((o) => o.id === shift.opportunityId);
   if (!opportunity) throw new Error(`Unknown opportunity: ${shift.opportunityId}`);
 
-  const reasons: ReasonCode[] = [];
-  const addReason = (code: ReasonCode) => {
-    if (!reasons.includes(code)) reasons.push(code);
-  };
-  let waitlistEligible = false;
-  let groupBlocked = false;
+  const opportunityLevel = getOpportunityLevelReasons(volunteer, opportunity, fixtures);
+  const openingLevel = getOpeningLevelReasons(volunteerId, opening, shift, fixtures);
 
-  if (!shift.isPublished) addReason('SHIFT_NOT_PUBLISHED');
-  if (!shift.isActive) addReason('SHIFT_INACTIVE');
-  if (!opening.isActive) addReason('OPENING_INACTIVE');
+  return combine(opportunityLevel, openingLevel);
+};
 
-  const existingSignup = fixtures.signups.find(
-    (s) => s.volunteerId === volunteerId && s.openingId === openingId
-  );
+export type OpeningEligibility = {
+  openingId: string;
+  status: EligibilityStatus;
+  reasons: ReasonCode[];
+};
 
-  if (existingSignup) {
-    addReason('ALREADY_SIGNED_UP');
-  } else {
-    const confirmedCount = fixtures.signups.filter(
-      (s) => s.openingId === openingId && s.state === 'CONFIRMED'
-    ).length;
+// Nice-to-have: check every opening under one opportunity for a volunteer in
+// one call. The opportunity-level rules (quals, waiver, group) are computed
+// once here instead of once per opening -- see the shared helpers above.
+export const checkEligibilityForOpportunity = (
+  volunteerId: string,
+  opportunityId: string,
+  fixtures: Fixtures
+): OpeningEligibility[] => {
+  const volunteer = fixtures.volunteers.find((v) => v.id === volunteerId);
+  if (!volunteer) throw new Error(`Unknown volunteer: ${volunteerId}`);
 
-    if (confirmedCount >= opening.maxVolunteers) {
-      const waitlistedCount = fixtures.signups.filter(
-        (s) => s.openingId === openingId && s.state === 'WAITLISTED'
-      ).length;
+  const opportunity = fixtures.opportunities.find((o) => o.id === opportunityId);
+  if (!opportunity) throw new Error(`Unknown opportunity: ${opportunityId}`);
 
-      if (opening.waitlistMax === 0) {
-        addReason('AT_CAPACITY');
-      } else if (waitlistedCount < opening.waitlistMax) {
-        waitlistEligible = true;
-      } else {
-        addReason('WAITLIST_FULL');
-      }
-    }
-  }
+  const opportunityLevel = getOpportunityLevelReasons(volunteer, opportunity, fixtures);
 
-  for (const rule of opportunity.qualificationRules) {
-    if (!rule.isActive) continue;
-    if (!passesQualificationRule(volunteer, rule)) {
-      addReason(rule.type === 'DOES_NOT_HAVE_ALL' ? 'DISALLOWED_QUALIFICATION' : 'MISSING_QUALIFICATION');
-    }
-  }
+  const shifts = fixtures.shifts.filter((s) => s.opportunityId === opportunityId);
+  const openings = fixtures.openings.filter((o) => shifts.some((s) => s.id === o.shiftId));
 
-  if (opportunity.requiredWaiverId) {
-    const waiver = fixtures.waivers.find((w) => w.id === opportunity.requiredWaiverId);
-    if (!waiver) throw new Error(`Unknown waiver: ${opportunity.requiredWaiverId}`);
+  return openings.map((opening) => {
+    const shift = shifts.find((s) => s.id === opening.shiftId);
+    if (!shift) throw new Error(`Unknown shift: ${opening.shiftId}`);
 
-    const hasCurrentSignature = volunteer.signedWaivers.some(
-      (sw) => sw.waiverId === waiver.id && sw.version === waiver.currentVersion
-    );
-    if (!hasCurrentSignature) addReason('WAIVER_REQUIRED');
-  }
+    const openingLevel = getOpeningLevelReasons(volunteerId, opening, shift, fixtures);
+    const { status, reasons } = combine(opportunityLevel, openingLevel);
 
-  // Group membership is confidential: this never adds a reason code, only
-  // forces BLOCKED. Other rules' reasons still surface normally -- see DECISIONS.
-  if (opportunity.restrictedToGroupIds.length > 0) {
-    const isMember = opportunity.restrictedToGroupIds.some((groupId) =>
-      volunteer.groupIds.includes(groupId)
-    );
-    if (!isMember) groupBlocked = true;
-  }
-
-  // A confirmed signup on this exact shift (whichever opening) is the same
-  // time slot, not a separate commitment -- only compare against genuinely
-  // different shifts.
-  const hasScheduleConflict = fixtures.signups
-    .filter((s) => s.volunteerId === volunteerId && s.state === 'CONFIRMED')
-    .some((s) => {
-      const otherOpening = fixtures.openings.find((o) => o.id === s.openingId);
-      if (!otherOpening) throw new Error(`Unknown opening: ${s.openingId}`);
-
-      const otherShift = fixtures.shifts.find((sh) => sh.id === otherOpening.shiftId);
-      if (!otherShift) throw new Error(`Unknown shift: ${otherOpening.shiftId}`);
-
-      return otherShift.id !== shift.id && shiftsOverlap(shift, otherShift);
-    });
-
-  if (hasScheduleConflict) addReason('SCHEDULE_CONFLICT');
-
-  const status = reasons.length > 0 || groupBlocked ? 'BLOCKED' : waitlistEligible ? 'WAITLIST' : 'ELIGIBLE';
-
-  return { status, reasons };
+    return { openingId: opening.id, status, reasons };
+  });
 };

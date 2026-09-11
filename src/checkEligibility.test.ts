@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkEligibility } from './checkEligibility';
+import { checkEligibility, checkEligibilityForOpportunity } from './checkEligibility';
 import type { EligibilityResult, Fixtures } from './types/index';
 
 const fixtures: Fixtures = JSON.parse(
@@ -74,5 +74,47 @@ describe('checkEligibility (supplementary cases for resolved ambiguities)', () =
   it('back-to-back shifts with no gap do not conflict', () => {
     const result = checkEligibility('vol-002', 'open-meals-mon-pm-server', fixtures);
     expectResult(result, { status: 'ELIGIBLE', reasons: [] });
+  });
+});
+
+// The bulk function shares logic with checkEligibility rather than
+// duplicating it, so these prove equivalence rather than re-asserting
+// hardcoded expected reasons -- the per-opening tests above already cover
+// correctness of the underlying rules.
+describe('checkEligibilityForOpportunity', () => {
+  const expectMatchesCheckEligibility = (volunteerId: string, opportunityId: string) => {
+    const bulkResults = checkEligibilityForOpportunity(volunteerId, opportunityId, fixtures);
+
+    const expectedOpeningIds = fixtures.openings
+      .filter((o) => fixtures.shifts.some((s) => s.id === o.shiftId && s.opportunityId === opportunityId))
+      .map((o) => o.id)
+      .sort();
+
+    expect(bulkResults.map((r) => r.openingId).sort()).toEqual(expectedOpeningIds);
+
+    for (const result of bulkResults) {
+      const individual = checkEligibility(volunteerId, result.openingId, fixtures);
+      expectResult(result, individual);
+    }
+  };
+
+  it('matches checkEligibility for every opening under opp-meals (5 shifts, capacity/waiver/schedule mix)', () => {
+    expectMatchesCheckEligibility('vol-002', 'opp-meals');
+  });
+
+  it('matches checkEligibility for every opening under opp-warehouse (schedule conflict + qualification rules)', () => {
+    expectMatchesCheckEligibility('vol-004', 'opp-warehouse');
+  });
+
+  it('matches checkEligibility for every opening under opp-kitchen (group restriction)', () => {
+    expectMatchesCheckEligibility('vol-003', 'opp-kitchen');
+  });
+
+  it('throws for an unknown opportunity', () => {
+    expect(() => checkEligibilityForOpportunity('vol-001', 'bogus-opp', fixtures)).toThrow();
+  });
+
+  it('throws for an unknown volunteer', () => {
+    expect(() => checkEligibilityForOpportunity('bogus-vol', 'opp-meals', fixtures)).toThrow();
   });
 });

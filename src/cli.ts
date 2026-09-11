@@ -1,12 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkEligibility } from './checkEligibility';
+import { checkEligibility, checkEligibilityForOpportunity } from './checkEligibility';
 import type { Fixtures } from './types/index';
 
-const [volunteerId, openingId] = process.argv.slice(2);
+const usage = [
+  'Usage:',
+  '  npm run cli -- opening <volunteerId> <openingId>',
+  '  npm run cli -- opportunity <volunteerId> <opportunityId>',
+].join('\n');
 
-if (!volunteerId || !openingId) {
-  console.error('Usage: npm run cli -- <volunteerId> <openingId>');
+const [mode, volunteerId, secondId] = process.argv.slice(2);
+
+if (!volunteerId || !secondId || (mode !== 'opening' && mode !== 'opportunity')) {
+  console.error(usage);
   process.exit(1);
 }
 
@@ -15,7 +21,11 @@ const fixtures: Fixtures = JSON.parse(
 );
 
 try {
-  const result = checkEligibility(volunteerId, openingId, fixtures);
+  const result =
+    mode === 'opening'
+      ? checkEligibility(volunteerId, secondId, fixtures)
+      : checkEligibilityForOpportunity(volunteerId, secondId, fixtures);
+
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {
   console.error(`Error: ${(error as Error).message}`);
