@@ -109,5 +109,5 @@ match. I'd add a line to the spec covering this case directly.
 
 I used A.I. to write, review, and test the code.
 I had it walk through step by step in order for me to try to make as many decisions as possible about what to instruct it to do. My main goal was to display decision making so I kept it on a pretty short leash. It did take SOME liberties but I tried to get it to go back and explain when it did so that I was in the know. 
-It actually go the checkEligibility's parameters wrong and I had to do a last minute refactor as I wanted to match the spec. 
+It actually got the checkEligibility's parameters wrong and I had to do a last minute refactor as I wanted to match the spec. 
 I also use it to "talk through my thoughts" as speaking with another always helps get my head moving.
